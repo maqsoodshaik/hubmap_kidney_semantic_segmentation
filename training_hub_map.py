@@ -1,17 +1,11 @@
 
 
 from collections import Counter
-
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-
 import matplotlib.pyplot as plt
-import cv2
-
 import torch
-from utils import get_cartesian_coords
+from utils import get_cartesian_coords,read_secret_from_json
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -20,14 +14,22 @@ from torch.utils.data import random_split
 from keras.metrics import MeanIoU
 from sklearn import metrics
 from dataset import CustomDataset
+import os
+import argparse
+
 #import wandb and log loss and accuracy
+
+# Path to the JSON file containing secrets
+json_file_path = '/home/c01gokr/CISPA-scratch/c01gokr/hubmap_kidney_semantic_segmentation/wandb_key.json'
+
+# Secret name you want to retrieve from the JSON file
+secret_name_to_retrieve = 'api_key'
+
+os.environ['WANDB_API_KEY'] = read_secret_from_json(json_file_path, secret_name_to_retrieve)
+
 import wandb
-wandb.init(project="hubmap")
-classes_dict = {
-    "blood_vessel": 2,
-    "glomerulus": 1,
-    "unsure": 0,
-}
+
+
 
 
 
@@ -95,15 +97,48 @@ class UNet(nn.Module):
     
 def train():
 
+
+    parser = argparse.ArgumentParser(description='')
+
+    # Add arguments
+    
+    parser.add_argument('--json-file', type=str, default='/home/c01gokr/CISPA-projects/lotteryhypothesis-2023/hubmap-hacking-the-human-vasculature/polygons.jsonl', help='Pass Path for json file')
+    parser.add_argument('--data-path', type=str, default='/home/c01gokr/CISPA-projects/lotteryhypothesis-2023/hubmap-hacking-the-human-vasculature/train', help='Pass the path for training dataset')
+    parser.add_argument('--batch-size', type=int, default='8', help='Batch size value for train')
+    parser.add_argument('--model-save-path', type=str, default='/home/c01gokr/CISPA-scratch/c01gokr/hubmap_kidney_semantic_segmentation/unet_best.pth', help='Path for saving best model')
+  
+
+    # Parse the arguments
+    args = parser.parse_args()
+
+    
+
     # Usage:
     in_channels = 3  # Assuming grayscale images
     out_channels = 3  # Number of output channels for segmentation mask (binary in this case)
+
+    config = {
+            "in_channels": in_channels,
+            "out_channels": out_channels,
+            "batch_size": args.batch_size,
+            "model_save_path": args.model_save_path,
+            }
+
+    # Pass the config dictionary when you initialize W&B
+    run = wandb.init(project="hubmap", config=config)
+    wandb.init(project="hubmap")
+    classes_dict = {
+    "blood_vessel": 2,
+    "glomerulus": 1,
+    "unsure": 0,
+                    }
     model = UNet(in_channels, out_channels)
+
 
     # Assuming you have a custom dataset class (YourDatasetClass) for training data
     # Replace YourDatasetClass and other dataset-related parameters with your actual dataset
-    dataset = CustomDataset(json_file="/content/drive/MyDrive/hubmap-hacking-the-human-vasculature/polygons.jsonl",
-        data_path="/content/drive/MyDrive/hubmap-hacking-the-human-vasculature/train",
+    dataset = CustomDataset(json_file=args.json_file,
+        data_path=args.data_path,
         class_names=classes_dict,
     )
     train_size = int(0.8 * len(dataset))
@@ -111,9 +146,9 @@ def train():
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     # Create DataLoader for training and validation sets
-    batch_size = 4
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 
 
     # Set device for training (GPU if available, else CPU)
@@ -177,7 +212,7 @@ def train():
         wandb.log({"iou_validation":avg_iou})
         print(f"Validation IOU: {avg_iou:.4f}")
         if avg_iou > iou_best:
-            torch.save(model.state_dict(), "unet_model.pth")
+            torch.save(model.state_dict(), args.model_save_path)
             iou_best = max(iou_best, avg_iou)
 
     # Validation loop (optional)
