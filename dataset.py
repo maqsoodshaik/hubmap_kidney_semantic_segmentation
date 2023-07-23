@@ -50,11 +50,13 @@ class CustomDataset(Dataset):
                         if self.augment_img:
                             return {
                             "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
-                            "target": add_random_occlusions(torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0))
+                            "target": add_random_occlusions(torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0)),
+                             "id": file.split(".")[0]
                             }
                         else:
                             return {
-                                "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0)
+                                "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
+                                "id": file.split(".")[0]
                             }
                         
         else:
@@ -79,10 +81,11 @@ class CustomDataset(Dataset):
                 cv2.fillPoly(label_img, [indices], self.class_names[name])
             # creating sample
             sample = {
-                "input": torch.as_tensor(np.array(array), dtype=torch.float32),
-                "target": torch.as_tensor(np.array(label_img), dtype=torch.long),
+                "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
+                "target": torch.as_tensor(np.array(label_img), dtype=torch.long).permute(1,0),
+                "id": id
             }
-            return torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0), torch.as_tensor(np.array(label_img), dtype=torch.long).permute(1,0)
+            return sample
 
 
 def add_random_occlusions(image, max_size=50, num_occlusions=5):
