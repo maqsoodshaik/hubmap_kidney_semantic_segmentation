@@ -16,6 +16,9 @@ from sklearn import metrics
 from dataset import CustomDataset
 import os
 import argparse
+import random
+from transformers import SamModel, SamProcessor
+from model_sam import SamAdapted
 
 #import wandb and log loss and accuracy
 
@@ -28,6 +31,8 @@ secret_name_to_retrieve = 'api_key'
 os.environ['WANDB_API_KEY'] = read_secret_from_json(json_file_path, secret_name_to_retrieve)
 
 import wandb
+
+
 
 
 
@@ -97,6 +102,9 @@ class UNet(nn.Module):
     
 def train():
 
+    
+    
+
 
     parser = argparse.ArgumentParser(description='')
 
@@ -104,13 +112,22 @@ def train():
     
     parser.add_argument('--json-file', type=str, default='/home/c01gokr/CISPA-projects/lotteryhypothesis-2023/hubmap-hacking-the-human-vasculature/polygons.jsonl', help='Pass Path for json file')
     parser.add_argument('--data-path', type=str, default='/home/c01gokr/CISPA-projects/lotteryhypothesis-2023/hubmap-hacking-the-human-vasculature/train', help='Pass the path for training dataset')
-    parser.add_argument('--batch-size', type=int, default='8', help='Batch size value for train')
-    parser.add_argument('--model-save-path', type=str, default='/home/c01gokr/CISPA-scratch/c01gokr/hubmap_kidney_semantic_segmentation/unet_best.pth', help='Path for saving best model')
+    parser.add_argument('--batch-size', type=int, default='32', help='Batch size value for train')
+    parser.add_argument('--model-save-path', type=str, default='/home/c01gokr/CISPA-scratch/c01gokr/hubmap_kidney_semantic_segmentation/unet_selfsupervised.pth', help='Path for saving best model')
+    parser.add_argument('--seed', type=str, default='42', help='seed for reproducability')
   
 
     # Parse the arguments
     args = parser.parse_args()
 
+    torch.manual_seed(args.seed)
+    
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
     
 
     # Usage:
@@ -132,15 +149,31 @@ def train():
     "glomerulus": 1,
     "unsure": 0,
                     }
+    # For Unet Ours                
     model = UNet(in_channels, out_channels)
+
+    #For Unet pretarined
+    # model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
+    # in_channels=in_channels, out_channels=1, init_features=32, pretrained=True)
+    # model.conv = nn.Conv2d(32,3,kernel_size = (1,1), stride =(1,1))
+    
+    # processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+    # pre_model = SamModel.from_pretrained("facebook/sam-vit-base")
+    # model = SamAdapted(in_channels, out_channels,pre_model)
+
 
 
     # Assuming you have a custom dataset class (YourDatasetClass) for training data
     # Replace YourDatasetClass and other dataset-related parameters with your actual dataset
-    dataset = CustomDataset(json_file=args.json_file,
+    # dataset = CustomDataset(json_file=args.json_file,
+    #     data_path=args.data_path,
+    #     class_names=classes_dict,
+    # )
+    dataset = CustomDataset(
         data_path=args.data_path,
-        class_names=classes_dict,
-    )
+        augment_img = True
+     )
+   
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
@@ -156,8 +189,9 @@ def train():
     model.to(device)
 
     # Define loss function and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    # criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
     IOU_keras = MeanIoU(num_classes=3)   
     # Training loop
     num_epochs = 50
@@ -167,7 +201,8 @@ def train():
         train_loss = 0.0
 
         for batch_id , batch in enumerate(train_loader):
-            images, masks = batch[0].to(device), batch[1].to(device)
+            # images = processor(batch['input'].permute(0,3,2,1),return_tensors = 'pt').to(device)
+            images, masks = batch['input'].to(device), batch['target'].to(device)
             optimizer.zero_grad()
 
             # Forward pass
@@ -192,52 +227,56 @@ def train():
         iou = 0.0
         
         with torch.no_grad():
-            for images, masks in val_loader:
-                images, masks = images.to(device), masks.to(device)
-                outputs = model(images)
-                prediction = torch.argmax(outputs, dim=1)
+            for batch in val_loader:
+                images, masks = batch['input'].to(device), batch['target'].to(device)
                 
+                #images = processor(batch['input'].permute(0,3,2,1),return_tensors = 'pt').to(device)
+                images, masks = images, masks
+                outputs = model(images)
+                #prediction = torch.argmax(outputs, dim=1)
                 loss = criterion(outputs, masks)
                 
-                IOU_keras.update_state(masks.detach().cpu().numpy(), prediction.detach().cpu().numpy())
-                print(IOU_keras.result().numpy())
-                iou += IOU_keras.result().numpy()
+                # IOU_keras.update_state(masks.detach().cpu().numpy(), prediction.detach().cpu().numpy())
+                # print(IOU_keras.result().numpy())
+                # iou += IOU_keras.result().numpy()
                 val_loss += loss.item()
-        avg_iou = iou/len(val_loader)
+        #avg_iou = iou/len(val_loader)
         
         # accuracy = accuracy/len(val_loader)
         avg_val_loss = val_loss / len(val_loader)
         print(f"Validation Loss: {avg_val_loss:.4f}")
         wandb.log({"validation_loss": avg_val_loss})
-        wandb.log({"iou_validation":avg_iou})
-        print(f"Validation IOU: {avg_iou:.4f}")
-        if avg_iou > iou_best:
-            torch.save(model.state_dict(), args.model_save_path)
-            iou_best = max(iou_best, avg_iou)
+        torch.save(model.state_dict(), args.model_save_path)
+        # wandb.log({"iou_validation":avg_iou})
+        # print(f"Validation IOU: {avg_iou:.4f}")
+        # if avg_iou > iou_best:
+        #     torch.save(model.state_dict(), args.model_save_path)
+        #     iou_best = max(iou_best, avg_iou)
+        
 
     # Validation loop (optional)
-    model.eval()
-    val_loss = 0.0
-    iou = 0.0
-    accuracy = 0.0
-    IOU_keras = MeanIoU(num_classes=3)      
-    with torch.no_grad():
-        for images, masks in val_loader:
-            images, masks = images.to(device), masks.to(device)
-            outputs = model(images)
-            prediction = torch.argmax(outputs, dim=1)
+    # model.eval()
+    # val_loss = 0.0
+    # iou = 0.0
+    # accuracy = 0.0
+    # IOU_keras = MeanIoU(num_classes=3)      
+    # with torch.no_grad():
+    #     for images, masks in val_loader:
+    #         images, masks = images.to(device), masks.to(device)
+    #         outputs = model(images)
+    #         prediction = torch.argmax(outputs, dim=1)
             
-            loss = criterion(outputs, masks)
+    #         loss = criterion(outputs, masks)
             
-            IOU_keras.update_state(masks, prediction)
-            print(IOU_keras.result().numpy())
-            iou += IOU_keras.result().numpy()
-            val_loss += loss.item()
-    avg_iou = iou/len(val_loader)
+    #         IOU_keras.update_state(masks, prediction)
+    #         print(IOU_keras.result().numpy())
+    #         iou += IOU_keras.result().numpy()
+    #         val_loss += loss.item()
+    # avg_iou = iou/len(val_loader)
     
-    # accuracy = accuracy/len(val_loader)
-    avg_val_loss = val_loss / len(val_loader)
-    print(f"Validation Loss: {avg_val_loss:.4f}")
+    # # accuracy = accuracy/len(val_loader)
+    # avg_val_loss = val_loss / len(val_loader)
+    # print(f"Validation Loss: {avg_val_loss:.4f}")
 
 if __name__ == "__main__":
     train()
