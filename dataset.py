@@ -8,6 +8,8 @@ from PIL import Image
 import numpy as np
 from utils import get_cartesian_coords
 import cv2
+import glob
+
 class CustomDataset(Dataset):
     '''
     custom dataset creation for hubmap competition
@@ -22,6 +24,7 @@ class CustomDataset(Dataset):
             self.tiles_dicts = []
             for json_str in json_list:
                 self.tiles_dicts.append(json.loads(json_str))
+            self.only_image_mode = False    
             # getting possible labels
             if class_names is not None:
                 self.class_names = class_names
@@ -29,35 +32,37 @@ class CustomDataset(Dataset):
                 print("No class names provided")
         except :
             print("No json file provided")
-            self.only_image__mode = True
+            self.only_image_mode = True
         self.datapath = data_path
         self.img_path_template = os.path.join(self.datapath, "{}.tif")
         self.augment_img = augment_img
         
 
     def __len__(self):
-        return len(self.tiles_dicts)
+        if self.only_image_mode == False:
+            return len(self.tiles_dicts)
+        else:
+            path_to_check = self.datapath
+            files  = len(glob.glob1(path_to_check,"*"))
+            return files
 
     def __getitem__(self, index):
-        if self.only_image__mode:
+        if self.only_image_mode:
             #loop through the images from the data path
-            for root, dirs, files in os.walk(self.datapath):
-                #if the file is a tif file
-                for file in files:
-                    if file.endswith(".tif"):
-                        #read the image
-                        array = tiff.imread(self.img_path_template.format(file.split(".")[0]))
-                        if self.augment_img:
-                            return {
-                            "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
-                            "target": add_random_occlusions(torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0)),
-                             "id": file.split(".")[0]
-                            }
-                        else:
-                            return {
-                                "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
-                                "id": file.split(".")[0]
-                            }
+            available_files = glob.glob1(self.datapath,"*")
+            # read the image
+            array = tiff.imread(self.img_path_template.format(available_files[index].split(".")[0]))
+            if self.augment_img:
+                return {
+                "target": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
+                "input": add_random_occlusions(torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0)),
+                    "id": available_files[index].split(".")[0]
+                }
+            else:
+                return {
+                    "input": torch.as_tensor(np.array(array), dtype=torch.float32).permute(2,1,0),
+                    "id": available_files[index].split(".")[0]
+                }
                         
         else:
             # reading input image
